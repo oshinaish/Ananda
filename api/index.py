@@ -1,37 +1,45 @@
+# New api/index.py for Vercel
 import os
 import json
 import base64
-from flask import Flask, jsonify
+from flask import Flask, request, jsonify
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
+# We don't need the OCR part for the MVP, 
+# as the goal is to get the image to the backend and update the sheet.
+# In a real app, you would add Google Vision API calls here.
 
 app = Flask(__name__)
 
-@app.route('/', defaults={'path': ''})
-@app.route('/<path:path>', methods=['GET'])
-def handler(path):
+@app.route('/api', methods=['POST'])
+def handler():
     try:
-        # --- CONFIGURATION ---
-        # IMPORTANT: Replace this with the ID of your working Google Sheet
-        SPREADSHEET_ID = '1YwDAnxU4-LzY5TCIR6LRjrtYjEIc1Sk6SNG3jmiID_g' 
+        # Check if an image file is part of the request
+        if 'image' not in request.files:
+            return jsonify({"error": "No image file found in the request."}), 400
         
-        SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
-        WORKSHEET_NAME = 'Purchases'
+        image_file = request.files['image']
+        # You can save or process the image_file here if needed in the future
+        # For now, we just confirm it was received.
 
-        # --- SECURELY LOAD CREDENTIALS FROM VERCEL ENVIRONMENT VARIABLE ---
+        # --- GOOGLE SHEETS LOGIC (same as before) ---
+        SPREADSHEET_ID = 'YOUR_WORKING_SPREADSHEET_ID_HERE' 
+        SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
+        WORKSHEET_NAME = 'Sheet1' 
+
         creds_json_b64 = os.environ.get('GOOGLE_CREDENTIALS_BASE64')
         if not creds_json_b64:
-            return jsonify({"error": "GOOGLE_CREDENTIALS_BASE64 environment variable not found."}), 500
+            return jsonify({"error": "Credentials not found."}), 500
         
         creds_json_str = base64.b64decode(creds_json_b64).decode('utf-8')
         creds_info = json.loads(creds_json_str)
         creds = service_account.Credentials.from_service_account_info(creds_info, scopes=SCOPES)
         
-        # --- GOOGLE SHEETS LOGIC ---
         service = build('sheets', 'v4', credentials=creds)
         sheet = service.spreadsheets()
 
-        data_to_add = [['Vercel Deployment Test', 'This entry was added at 8:05 PM IST on Sep 23, 2025']]
+        # Add a placeholder row to confirm the app connection
+        data_to_add = [['Image received from Flutter App', 'Success', '24/09/2025']]
         request_body = {'values': data_to_add}
 
         result = sheet.values().append(
@@ -41,11 +49,11 @@ def handler(path):
             body=request_body
         ).execute()
 
-        return jsonify({
-            "message": "✅ Success! The Google Sheet was updated.",
-            "updatedCells": result.get('updates').get('updatedCells')
-        })
+        return jsonify({"message": "✅ Success! Image received and Sheet updated."})
 
     except Exception as e:
-        # Provide a detailed error message for easier debugging
         return jsonify({"error": "An exception occurred", "details": str(e)}), 500
+
+# This allows the app to be run locally for testing if needed
+if __name__ == "__main__":
+    app.run(debug=True)
