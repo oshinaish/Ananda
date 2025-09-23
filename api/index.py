@@ -13,10 +13,10 @@ def handler(path):
     try:
         # --- CONFIGURATION ---
         # IMPORTANT: Replace this with the ID of your working Google Sheet
-        SPREADSHEET_ID = 'YOUR_WORKING_SPREADSHEET_ID_HERE' 
+        SPREADSHEET_ID = '1YwDAnxU4-LzY5TCIR6LRjrtYjEIc1Sk6SNG3jmiID_g' 
         
         SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
-        WORKSHEET_NAME = 'Sheet1' # Or whatever your tab is named, e.g., 'Purchases'
+        WORKSHEET_NAME = 'Purchases'
 
         # --- SECURELY LOAD CREDENTIALS FROM VERCEL ENVIRONMENT VARIABLE ---
         creds_json_b64 = os.environ.get('GOOGLE_CREDENTIALS_BASE64')
