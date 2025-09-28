@@ -3,27 +3,26 @@ import os
 import json
 import base64
 from flask import Flask, request, jsonify
+from flask_cors import CORS # Import CORS
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
-# We don't need the OCR part for the MVP, 
-# as the goal is to get the image to the backend and update the sheet.
-# In a real app, you would add Google Vision API calls here.
 
 app = Flask(__name__)
+CORS(app) # Enable CORS for all routes
 
 @app.route('/api', methods=['POST'])
 def handler():
     try:
-        # Check if an image file is part of the request
         if 'image' not in request.files:
             return jsonify({"error": "No image file found in the request."}), 400
         
         image_file = request.files['image']
-        # You can save or process the image_file here if needed in the future
-        # For now, we just confirm it was received.
+        
+        # --- GOOGLE SHEETS LOGIC ---
+        SPREADSHEET_ID = os.environ.get('SPREADSHEET_ID')
+        if not SPREADSHEET_ID:
+            return jsonify({"error": "SPREADSHEET_ID environment variable not set."}), 500
 
-        # --- GOOGLE SHEETS LOGIC (same as before) ---
-        SPREADSHEET_ID = 'YOUR_WORKING_SPREADSHEET_ID_HERE' 
         SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
         WORKSHEET_NAME = 'Sheet1' 
 
@@ -38,8 +37,7 @@ def handler():
         service = build('sheets', 'v4', credentials=creds)
         sheet = service.spreadsheets()
 
-        # Add a placeholder row to confirm the app connection
-        data_to_add = [['Image received from Flutter App', 'Success', '24/09/2025']]
+        data_to_add = [['Image received from PWA', 'Success!', '28/09/2025']]
         request_body = {'values': data_to_add}
 
         result = sheet.values().append(
@@ -54,6 +52,5 @@ def handler():
     except Exception as e:
         return jsonify({"error": "An exception occurred", "details": str(e)}), 500
 
-# This allows the app to be run locally for testing if needed
 if __name__ == "__main__":
     app.run(debug=True)
