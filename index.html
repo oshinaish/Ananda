@@ -10,28 +10,41 @@
     <link rel="manifest" href="manifest.json">
     <!-- Theme color for the browser address bar -->
     <meta name="theme-color" content="#4A90E2">
+    <!-- **IMPROVEMENT**: Import Image Compression Library -->
+    <script src="https://cdn.jsdelivr.net/npm/browser-image-compression@2.0.1/dist/browser-image-compression.js"></script>
     <style>
-        /* A little extra style for better feel */
         body { font-family: 'Inter', sans-serif; }
-        .btn {
-            transition: background-color 0.3s, transform 0.2s;
-        }
-        .btn:active {
-            transform: scale(0.98);
+        .btn { transition: background-color 0.3s, transform 0.2s; }
+        .btn:active { transform: scale(0.98); }
+        /* **IMPROVEMENT**: Styles for the new Toast Notification */
+        #toast {
+            position: fixed;
+            top: -100px;
+            left: 50%;
+            transform: translateX(-50%);
+            padding: 1rem 1.5rem;
+            border-radius: 0.5rem;
+            color: white;
+            font-weight: 600;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.2);
+            transition: top 0.5s ease-in-out;
+            z-index: 100;
         }
     </style>
 </head>
 <body class="bg-gray-100 flex items-center justify-center min-h-screen">
 
-    <div id="app" class="w-full max-w-md mx-auto bg-white rounded-xl shadow-lg p-6 space-y-6">
+    <!-- **IMPROVEMENT**: Toast Notification element -->
+    <div id="toast"></div>
 
+    <div id="app" class="w-full max-w-md mx-auto bg-white rounded-xl shadow-lg p-6 space-y-6 overflow-hidden">
         <!-- ===== HOME SCREEN ===== -->
         <div id="home-screen">
             <header class="text-center">
                 <h1 class="text-2xl font-bold text-gray-800">Restaurant Cost Tracker 🍽️</h1>
             </header>
             <main class="space-y-4 mt-6">
-                <button onclick="showImageSourceDialog('Purchase Invoice')" class="btn w-full bg-blue-500 text-white py-4 px-4 rounded-lg font-semibold text-lg flex items-center justify-center space-x-2 hover:bg-blue-600">
+                 <button onclick="showImageSourceDialog('Purchase Invoice')" class="btn w-full bg-blue-500 text-white py-4 px-4 rounded-lg font-semibold text-lg flex items-center justify-center space-x-2 hover:bg-blue-600">
                     <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
                     <span>Upload Purchase Invoice</span>
                 </button>
@@ -46,9 +59,9 @@
             </main>
         </div>
 
-        <!-- ===== VERIFICATION SCREEN (hidden by default) ===== -->
+        <!-- ===== VERIFICATION SCREEN ===== -->
         <div id="verification-screen" class="hidden">
-            <header class="flex items-center space-x-4">
+             <header class="flex items-center space-x-4">
                  <button onclick="showHomeScreen()" class="text-gray-500 hover:text-gray-800">&larr; Back</button>
                 <h1 class="text-xl font-bold text-gray-800">Verify & Upload</h1>
             </header>
@@ -59,26 +72,40 @@
                     <span>Confirm & Save</span>
                 </button>
                 <div id="loading-spinner" class="hidden text-center">
-                    <p>Uploading...</p>
+                     <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500 mx-auto"></div>
+                    <p class="mt-2">Compressing & Uploading...</p>
                 </div>
             </main>
         </div>
+
+        <!-- **IMPROVEMENT**: Dialog for choosing image source -->
+        <div id="source-dialog" class="hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center">
+            <div class="bg-white rounded-lg p-6 w-11/12 max-w-xs">
+                <h3 class="font-bold text-lg mb-4">Select Source</h3>
+                <div class="space-y-3">
+                    <button onclick="pickImage(false)" class="w-full text-left p-3 hover:bg-gray-100 rounded-md">Take Photo</button>
+                    <button onclick="pickImage(true)" class="w-full text-left p-3 hover:bg-gray-100 rounded-md">Choose from Gallery</button>
+                </div>
+                <button onclick="document.getElementById('source-dialog').classList.add('hidden')" class="w-full text-center mt-4 p-2 text-red-500 font-semibold">Cancel</button>
+            </div>
+        </div>
     </div>
 
-    <!-- Hidden file input -->
-    <input type="file" id="image-picker" accept="image/*" class="hidden">
+    <!-- Hidden file inputs -->
+    <input type="file" id="gallery-picker" accept="image/*" class="hidden">
     <input type="file" id="camera-picker" accept="image/*" capture="environment" class="hidden">
 
     <script>
-        // --- STATE MANAGEMENT ---
+        // --- STATE & ELEMENTS ---
         let selectedFile = null;
         const homeScreen = document.getElementById('home-screen');
         const verificationScreen = document.getElementById('verification-screen');
         const imagePreview = document.getElementById('image-preview');
-        const imagePicker = document.getElementById('image-picker');
+        const galleryPicker = document.getElementById('gallery-picker');
         const cameraPicker = document.getElementById('camera-picker');
         const confirmBtn = document.getElementById('confirm-btn');
         const loadingSpinner = document.getElementById('loading-spinner');
+        const sourceDialog = document.getElementById('source-dialog');
 
         // --- NAVIGATION ---
         function showVerificationScreen() {
@@ -91,60 +118,86 @@
             homeScreen.classList.remove('hidden');
             selectedFile = null;
             imagePreview.src = '';
+            galleryPicker.value = null; // Reset file input
+            cameraPicker.value = null;  // Reset file input
         }
 
-        // --- IMAGE HANDLING ---
+        // --- **IMPROVEMENT**: TOAST NOTIFICATION ---
+        function showToast(message, isError = false) {
+            const toast = document.getElementById('toast');
+            toast.textContent = message;
+            toast.style.backgroundColor = isError ? '#ef4444' : '#22c55e';
+            toast.style.top = '20px';
+            setTimeout(() => {
+                toast.style.top = '-100px';
+            }, 3000);
+        }
+
+        // --- **IMPROVEMENT**: IMAGE HANDLING ---
         function showImageSourceDialog() {
-            // On the web, we can simplify this. We'll use a single file input.
-            // The 'capture' attribute provides a hint to mobile browsers to open the camera.
-            // We can improve this with a custom dialog later if needed.
-             imagePicker.click();
+            sourceDialog.classList.remove('hidden');
         }
 
-        imagePicker.addEventListener('change', (event) => {
+        function pickImage(fromGallery) {
+            sourceDialog.classList.add('hidden');
+            const picker = fromGallery ? galleryPicker : cameraPicker;
+            picker.click();
+        }
+
+        async function handleFileSelect(event) {
             const file = event.target.files[0];
             if (file) {
-                selectedFile = file;
-                imagePreview.src = URL.createObjectURL(file);
-                showVerificationScreen();
+                // **IMPROVEMENT**: Image Compression
+                const options = {
+                    maxSizeMB: 1,          // (max file size in MB)
+                    maxWidthOrHeight: 1920, // (max dimension)
+                    useWebWorker: true
+                }
+                try {
+                    console.log(`Original file size: ${(file.size / 1024 / 1024).toFixed(2)} MB`);
+                    const compressedFile = await imageCompression(file, options);
+                    console.log(`Compressed file size: ${(compressedFile.size / 1024 / 1024).toFixed(2)} MB`);
+                    selectedFile = compressedFile;
+                    imagePreview.src = URL.createObjectURL(compressedFile);
+                    showVerificationScreen();
+                } catch (error) {
+                    console.error('Image compression error:', error);
+                    showToast('Failed to compress image.', true);
+                }
             }
-        });
+        }
+        galleryPicker.addEventListener('change', handleFileSelect);
+        cameraPicker.addEventListener('change', handleFileSelect);
         
         // --- API CALL ---
         async function uploadImage() {
             if (!selectedFile) {
-                alert('No file selected.');
+                showToast('No file selected.', true);
                 return;
             }
-
-            // Replace with your actual Vercel deployment URL
+            
+            // **FIX**: Using your live Vercel URL
             const vercelUrl = 'https://ananda-ecru.vercel.app/api';
 
             const formData = new FormData();
             formData.append('image', selectedFile);
 
-            // Show loading state
             confirmBtn.classList.add('hidden');
             loadingSpinner.classList.remove('hidden');
 
             try {
-                const response = await fetch(vercelUrl, {
-                    method: 'POST',
-                    body: formData,
-                });
-
+                const response = await fetch(vercelUrl, { method: 'POST', body: formData });
                 if (response.ok) {
-                    alert('Success! Data sent to Google Sheet.');
+                    showToast('Success! Data sent to Google Sheet.');
                     showHomeScreen();
                 } else {
                     const error = await response.json();
-                    alert(`Error: ${error.details || 'Failed to upload.'}`);
+                    showToast(`Error: ${error.details || 'Upload failed.'}`, true);
                 }
             } catch (error) {
                 console.error('Upload error:', error);
-                alert('An error occurred while uploading the image.');
+                showToast('Upload failed. Check console for details.', true);
             } finally {
-                // Hide loading state
                 confirmBtn.classList.remove('hidden');
                 loadingSpinner.classList.add('hidden');
             }
@@ -153,13 +206,10 @@
         // --- SERVICE WORKER REGISTRATION ---
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
-                navigator.serviceWorker.register('/sw.js').then(registration => {
-                    console.log('ServiceWorker registration successful with scope: ', registration.scope);
-                }, err => {
-                    console.log('ServiceWorker registration failed: ', err);
-                });
+                navigator.serviceWorker.register('/sw.js').then(reg => console.log('SW registered.'), err => console.error('SW registration failed:', err));
             });
         }
     </script>
 </body>
 </html>
+
