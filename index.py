@@ -1,4 +1,4 @@
-# New api/index.py for Vercel
+# Main Python file (index.py) for Vercel
 import os
 import json
 import base64
@@ -10,14 +10,17 @@ from googleapiclient.discovery import build
 app = Flask(__name__)
 CORS(app) # Enable CORS for all routes
 
-# --- NEW DEBUGGING ROUTE ---
-@app.route('/', methods=['GET'])
+# --- DEBUGGING ROUTE ---
+# This route now explicitly handles the /api path for GET requests
+@app.route('/api', methods=['GET'])
 def ping_handler():
     """A simple test route to check if the server is alive and CORS is working."""
     return jsonify({"status": "ok", "message": "Backend is running!"})
 
 
-@app.route('/', methods=['POST'])
+# --- UPLOAD ROUTE ---
+# This route now explicitly handles the /api path for POST requests
+@app.route('/api', methods=['POST'])
 def upload_handler():
     try:
         if 'image' not in request.files:
@@ -58,7 +61,3 @@ def upload_handler():
 
     except Exception as e:
         return jsonify({"error": "An exception occurred", "details": str(e)}), 500
-
-if __name__ == "__main__":
-    app.run(debug=True)
-
