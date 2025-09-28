@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Restaurant Cost Tracker</title>
+    <!-- Tailwind CSS for styling -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Link to the Manifest file -->
+    <link rel="manifest" href="manifest.json">
+    <!-- Theme color for the browser address bar -->
+    <meta name="theme-color" content="#4A90E2">
+    <style>
+        /* A little extra style for better feel */
+        body { font-family: 'Inter', sans-serif; }
+        .btn {
+            transition: background-color 0.3s, transform 0.2s;
+        }
+        .btn:active {
+            transform: scale(0.98);
+        }
+    </style>
+</head>
+<body class="bg-gray-100 flex items-center justify-center min-h-screen">
+
+    <div id="app" class="w-full max-w-md mx-auto bg-white rounded-xl shadow-lg p-6 space-y-6">
+
+        <!-- ===== HOME SCREEN ===== -->
+        <div id="home-screen">
+            <header class="text-center">
+                <h1 class="text-2xl font-bold text-gray-800">Restaurant Cost Tracker 🍽️</h1>
+            </header>
+            <main class="space-y-4 mt-6">
+                <button onclick="showImageSourceDialog('Purchase Invoice')" class="btn w-full bg-blue-500 text-white py-4 px-4 rounded-lg font-semibold text-lg flex items-center justify-center space-x-2 hover:bg-blue-600">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
+                    <span>Upload Purchase Invoice</span>
+                </button>
+                <button onclick="showImageSourceDialog('Inventory Out')" class="btn w-full bg-green-500 text-white py-4 px-4 rounded-lg font-semibold text-lg flex items-center justify-center space-x-2 hover:bg-green-600">
+                     <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" /></svg>
+                    <span>Upload Inventory Out</span>
+                </button>
+                 <button onclick="showImageSourceDialog('Store Demand')" class="btn w-full bg-yellow-500 text-white py-4 px-4 rounded-lg font-semibold text-lg flex items-center justify-center space-x-2 hover:bg-yellow-600">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg>
+                    <span>Upload Store Demand</span>
+                </button>
+            </main>
+        </div>
+
+        <!-- ===== VERIFICATION SCREEN (hidden by default) ===== -->
+        <div id="verification-screen" class="hidden">
+            <header class="flex items-center space-x-4">
+                 <button onclick="showHomeScreen()" class="text-gray-500 hover:text-gray-800">&larr; Back</button>
+                <h1 class="text-xl font-bold text-gray-800">Verify & Upload</h1>
+            </header>
+            <main class="mt-4 space-y-4">
+                <img id="image-preview" src="" alt="Selected image" class="rounded-lg max-h-60 w-full object-cover">
+                <p class="text-center text-gray-500 italic">Data will be editable here in a future version.</p>
+                <button id="confirm-btn" onclick="uploadImage()" class="btn w-full bg-green-600 text-white py-4 px-4 rounded-lg font-semibold text-lg flex items-center justify-center space-x-2 hover:bg-green-700">
+                    <span>Confirm & Save</span>
+                </button>
+                <div id="loading-spinner" class="hidden text-center">
+                    <p>Uploading...</p>
+                </div>
+            </main>
+        </div>
+    </div>
+
+    <!-- Hidden file input -->
+    <input type="file" id="image-picker" accept="image/*" class="hidden">
+    <input type="file" id="camera-picker" accept="image/*" capture="environment" class="hidden">
+
+    <script>
+        // --- STATE MANAGEMENT ---
+        let selectedFile = null;
+        const homeScreen = document.getElementById('home-screen');
+        const verificationScreen = document.getElementById('verification-screen');
+        const imagePreview = document.getElementById('image-preview');
+        const imagePicker = document.getElementById('image-picker');
+        const cameraPicker = document.getElementById('camera-picker');
+        const confirmBtn = document.getElementById('confirm-btn');
+        const loadingSpinner = document.getElementById('loading-spinner');
+
+        // --- NAVIGATION ---
+        function showVerificationScreen() {
+            homeScreen.classList.add('hidden');
+            verificationScreen.classList.remove('hidden');
+        }
+
+        function showHomeScreen() {
+            verificationScreen.classList.add('hidden');
+            homeScreen.classList.remove('hidden');
+            selectedFile = null;
+            imagePreview.src = '';
+        }
+
+        // --- IMAGE HANDLING ---
+        function showImageSourceDialog() {
+            // On the web, we can simplify this. We'll use a single file input.
+            // The 'capture' attribute provides a hint to mobile browsers to open the camera.
+            // We can improve this with a custom dialog later if needed.
+             imagePicker.click();
+        }
+
+        imagePicker.addEventListener('change', (event) => {
+            const file = event.target.files[0];
+            if (file) {
+                selectedFile = file;
+                imagePreview.src = URL.createObjectURL(file);
+                showVerificationScreen();
+            }
+        });
+        
+        // --- API CALL ---
+        async function uploadImage() {
+            if (!selectedFile) {
+                alert('No file selected.');
+                return;
+            }
+
+            // Replace with your actual Vercel deployment URL
+            const vercelUrl = 'https://restaurant-backend-your-id.vercel.app/api';
+
+            const formData = new FormData();
+            formData.append('image', selectedFile);
+
+            // Show loading state
+            confirmBtn.classList.add('hidden');
+            loadingSpinner.classList.remove('hidden');
+
+            try {
+                const response = await fetch(vercelUrl, {
+                    method: 'POST',
+                    body: formData,
+                });
+
+                if (response.ok) {
+                    alert('Success! Data sent to Google Sheet.');
+                    showHomeScreen();
+                } else {
+                    const error = await response.json();
+                    alert(`Error: ${error.details || 'Failed to upload.'}`);
+                }
+            } catch (error) {
+                console.error('Upload error:', error);
+                alert('An error occurred while uploading the image.');
+            } finally {
+                // Hide loading state
+                confirmBtn.classList.remove('hidden');
+                loadingSpinner.classList.add('hidden');
+            }
+        }
+        
+        // --- SERVICE WORKER REGISTRATION ---
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('/sw.js').then(registration => {
+                    console.log('ServiceWorker registration successful with scope: ', registration.scope);
+                }, err => {
+                    console.log('ServiceWorker registration failed: ', err);
+                });
+            });
+        }
+    </script>
+</body>
+</html>
