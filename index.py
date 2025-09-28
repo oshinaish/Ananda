@@ -37,16 +37,19 @@ def main_handler():
             image_file = request.files['image']
             image_content = image_file.read()
 
-            # --- OCR with Google Cloud Vision ---
+            # --- OCR with Google Cloud Vision (IMPROVED) ---
             creds_info = get_google_creds()
             vision_credentials = service_account.Credentials.from_service_account_info(creds_info)
             vision_client = vision.ImageAnnotatorClient(credentials=vision_credentials)
             image = vision.Image(content=image_content)
-            response = vision_client.text_detection(image=image)
+            
+            # --- CHANGE: Use document_text_detection for better results on invoices ---
+            response = vision_client.document_text_detection(image=image)
             texts = response.text_annotations
             
             extracted_text = "No text found."
             if texts:
+                # The full text is still in the first annotation for this method
                 extracted_text = texts[0].description
             if response.error.message:
                 raise Exception(f"Google Vision API Error: {response.error.message}")
