@@ -12,13 +12,13 @@ CORS(app) # Enable CORS for all routes
 
 # --- NEW DEBUGGING ROUTE ---
 @app.route('/', methods=['GET'])
-def ping():
+def ping_handler():
     """A simple test route to check if the server is alive and CORS is working."""
     return jsonify({"status": "ok", "message": "Backend is running!"})
 
 
 @app.route('/', methods=['POST'])
-def handler():
+def upload_handler():
     try:
         if 'image' not in request.files:
             return jsonify({"error": "No image file found in the request."}), 400
