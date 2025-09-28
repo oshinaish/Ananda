@@ -31,7 +31,7 @@ def handler():
             return jsonify({"error": "SPREADSHEET_ID environment variable not set."}), 500
 
         SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
-        WORKSHEET_NAME = 'Purchases' 
+        WORKSHEET_NAME = 'Sheet1' 
 
         creds_json_b64 = os.environ.get('GOOGLE_CREDENTIALS_BASE64')
         if not creds_json_b64:
