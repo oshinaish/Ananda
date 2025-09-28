@@ -10,7 +10,14 @@ from googleapiclient.discovery import build
 app = Flask(__name__)
 CORS(app) # Enable CORS for all routes
 
-@app.route('/api', methods=['POST'])
+# --- NEW DEBUGGING ROUTE ---
+@app.route('/', methods=['GET'])
+def ping():
+    """A simple test route to check if the server is alive and CORS is working."""
+    return jsonify({"status": "ok", "message": "Backend is running!"})
+
+
+@app.route('/', methods=['POST'])
 def handler():
     try:
         if 'image' not in request.files:
@@ -24,7 +31,7 @@ def handler():
             return jsonify({"error": "SPREADSHEET_ID environment variable not set."}), 500
 
         SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
-        WORKSHEET_NAME = 'Sheet1' 
+        WORKSHEET_NAME = 'Purchases' 
 
         creds_json_b64 = os.environ.get('GOOGLE_CREDENTIALS_BASE64')
         if not creds_json_b64:
@@ -54,3 +61,4 @@ def handler():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
