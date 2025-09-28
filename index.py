@@ -3,23 +3,30 @@ import os
 import json
 import base64
 from flask import Flask, request, jsonify
-from flask_cors import CORS # Import CORS
+from flask_cors import CORS
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
+# --- NEW: Import Google Cloud Vision client library ---
+from google.cloud import vision
 
 app = Flask(__name__)
-CORS(app) # Enable CORS for all routes
+CORS(app)
+
+# --- Function to get Google API credentials ---
+def get_google_creds():
+    creds_json_b64 = os.environ.get('GOOGLE_CREDENTIALS_BASE64')
+    if not creds_json_b64:
+        raise ValueError("GOOGLE_CREDENTIALS_BASE64 environment variable not found.")
+    
+    creds_json_str = base64.b64decode(creds_json_b64).decode('utf-8')
+    return json.loads(creds_json_str)
 
 # --- DEBUGGING ROUTE ---
-# This route now explicitly handles the /api path for GET requests
 @app.route('/api', methods=['GET'])
 def ping_handler():
-    """A simple test route to check if the server is alive and CORS is working."""
-    return jsonify({"status": "ok", "message": "Backend is running!"})
+    return jsonify({"status": "ok", "message": "Backend is running and ready for OCR!"})
 
-
-# --- UPLOAD ROUTE ---
-# This route now explicitly handles the /api path for POST requests
+# --- UPLOAD ROUTE (UPGRADED WITH OCR) ---
 @app.route('/api', methods=['POST'])
 def upload_handler():
     try:
@@ -27,37 +34,50 @@ def upload_handler():
             return jsonify({"error": "No image file found in the request."}), 400
         
         image_file = request.files['image']
+        image_content = image_file.read() # Read image content as bytes
+
+        # --- STEP 1: OCR with Google Cloud Vision ---
+        creds_info = get_google_creds()
+        vision_credentials = service_account.Credentials.from_service_account_info(creds_info)
+        vision_client = vision.ImageAnnotatorClient(credentials=vision_credentials)
+
+        image = vision.Image(content=image_content)
+        response = vision_client.text_detection(image=image)
+        texts = response.text_annotations
         
-        # --- GOOGLE SHEETS LOGIC ---
+        extracted_text = ""
+        if texts:
+            # The first text annotation contains the full block of text
+            extracted_text = texts[0].description
+        
+        if response.error.message:
+            raise Exception(f"Google Vision API Error: {response.error.message}")
+
+        # --- STEP 2: Write a confirmation to Google Sheets ---
         SPREADSHEET_ID = os.environ.get('SPREADSHEET_ID')
         if not SPREADSHEET_ID:
-            return jsonify({"error": "SPREADSHEET_ID environment variable not set."}), 500
-
-        SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
-        WORKSHEET_NAME = 'Sheet1' 
-
-        creds_json_b64 = os.environ.get('GOOGLE_CREDENTIALS_BASE64')
-        if not creds_json_b64:
-            return jsonify({"error": "Credentials not found."}), 500
+            raise ValueError("SPREADSHEET_ID environment variable not set.")
         
-        creds_json_str = base64.b64decode(creds_json_b64).decode('utf-8')
-        creds_info = json.loads(creds_json_str)
-        creds = service_account.Credentials.from_service_account_info(creds_info, scopes=SCOPES)
-        
-        service = build('sheets', 'v4', credentials=creds)
+        sheets_credentials = service_account.Credentials.from_service_account_info(creds_info, scopes=['https://www.googleapis.com/auth/spreadsheets'])
+        service = build('sheets', 'v4', credentials=sheets_credentials)
         sheet = service.spreadsheets()
 
-        data_to_add = [['Image received from PWA', 'Success!', '28/09/2025']]
+        data_to_add = [['OCR Success', 'Text Extracted Successfully', '28/09/2025']]
         request_body = {'values': data_to_add}
 
-        result = sheet.values().append(
+        sheet.values().append(
             spreadsheetId=SPREADSHEET_ID,
-            range=f"{WORKSHEET_NAME}!A1",
+            range='Sheet1!A1',
             valueInputOption='USER_ENTERED',
             body=request_body
         ).execute()
-
-        return jsonify({"message": "✅ Success! Image received and Sheet updated."})
+        
+        # --- STEP 3: Return the extracted text to the PWA ---
+        return jsonify({
+            "message": "✅ Success! Text extracted.",
+            "extractedText": extracted_text
+        })
 
     except Exception as e:
         return jsonify({"error": "An exception occurred", "details": str(e)}), 500
+
