@@ -20,63 +20,78 @@ def get_google_creds():
     creds_json_str = base64.b64decode(creds_json_b64).decode('utf-8')
     return json.loads(creds_json_str)
 
-# --- UPLOAD ROUTE (The main API endpoint) ---
-# Note: The route is now '/api' because vercel.json will direct traffic here.
-@app.route('/api', methods=['POST', 'GET'])
-def main_handler():
-    # Handle GET requests (for simple testing)
-    if request.method == 'GET':
-        return jsonify({"status": "ok", "message": "Backend is running!"})
+# --- NEW: Endpoint 1 - Perform OCR and return text ---
+@app.route('/api/ocr', methods=['POST'])
+def ocr_handler():
+    try:
+        if 'image' not in request.files:
+            return jsonify({"error": "No image file found."}), 400
+        
+        image_file = request.files['image']
+        image_content = image_file.read()
 
-    # Handle POST requests (for file uploads)
-    if request.method == 'POST':
-        try:
-            if 'image' not in request.files:
-                return jsonify({"error": "No image file found in the request."}), 400
-            
-            image_file = request.files['image']
-            image_content = image_file.read()
+        # --- OCR with Google Cloud Vision ---
+        creds_info = get_google_creds()
+        vision_credentials = service_account.Credentials.from_service_account_info(creds_info)
+        vision_client = vision.ImageAnnotatorClient(credentials=vision_credentials)
+        image = vision.Image(content=image_content)
+        
+        response = vision_client.document_text_detection(image=image)
+        texts = response.text_annotations
+        
+        extracted_text = "No text found."
+        if texts:
+            extracted_text = texts[0].description
+        if response.error.message:
+            raise Exception(f"Google Vision API Error: {response.error.message}")
 
-            # --- OCR with Google Cloud Vision (IMPROVED) ---
-            creds_info = get_google_creds()
-            vision_credentials = service_account.Credentials.from_service_account_info(creds_info)
-            vision_client = vision.ImageAnnotatorClient(credentials=vision_credentials)
-            image = vision.Image(content=image_content)
-            
-            # --- CHANGE: Use document_text_detection for better results on invoices ---
-            response = vision_client.document_text_detection(image=image)
-            texts = response.text_annotations
-            
-            extracted_text = "No text found."
-            if texts:
-                # The full text is still in the first annotation for this method
-                extracted_text = texts[0].description
-            if response.error.message:
-                raise Exception(f"Google Vision API Error: {response.error.message}")
+        # --- Return ONLY the extracted text ---
+        return jsonify({
+            "message": "✅ Success! Text extracted.",
+            "extractedText": extracted_text
+        })
 
-            # --- Write to Google Sheets ---
-            SPREADSHEET_ID = os.environ.get('SPREADSHEET_ID')
-            if not SPREADSHEET_ID:
-                raise ValueError("SPREADSHEET_ID environment variable not set.")
-            
-            sheets_credentials = service_account.Credentials.from_service_account_info(creds_info, scopes=['https://www.googleapis.com/auth/spreadsheets'])
-            service = build('sheets', 'v4', credentials=sheets_credentials)
-            sheet = service.spreadsheets()
-            data_to_add = [['OCR Success', extracted_text[:500], '28/09/2025']] # Truncate text
-            request_body = {'values': data_to_add}
-            sheet.values().append(
-                spreadsheetId=SPREADSHEET_ID,
-                range='Sheet1!A1',
-                valueInputOption='USER_ENTERED',
-                body=request_body
-            ).execute()
-            
-            # --- Return Success Response ---
-            return jsonify({
-                "message": "✅ Success! Text extracted.",
-                "extractedText": extracted_text
-            })
+    except Exception as e:
+        return jsonify({"error": "An exception occurred during OCR", "details": str(e)}), 500
 
-        except Exception as e:
-            return jsonify({"error": "An exception occurred", "details": str(e)}), 500
+
+# --- NEW: Endpoint 2 - Receive corrected text and save to Sheets ---
+@app.route('/api/save', methods=['POST'])
+def save_handler():
+    try:
+        data = request.get_json()
+        if not data or 'text' not in data:
+            return jsonify({"error": "No text provided in the request."}), 400
+
+        corrected_text = data['text']
+
+        # --- Write to Google Sheets ---
+        SPREADSHEET_ID = os.environ.get('SPREADSHEET_ID')
+        if not SPREADSHEET_ID:
+            raise ValueError("SPREADSHEET_ID environment variable not set.")
+        
+        creds_info = get_google_creds()
+        sheets_credentials = service_account.Credentials.from_service_account_info(creds_info, scopes=['https://www.googleapis.com/auth/spreadsheets'])
+        service = build('sheets', 'v4', credentials=sheets_credentials)
+        sheet = service.spreadsheets()
+        
+        # Use the corrected text from the frontend
+        data_to_add = [['Final Data Saved', corrected_text[:1500], '30/09/2025']] # Store more text
+        request_body = {'values': data_to_add}
+        sheet.values().append(
+            spreadsheetId=SPREADSHEET_ID,
+            range='Sheet1!A1',
+            valueInputOption='USER_ENTERED',
+            body=request_body
+        ).execute()
+        
+        return jsonify({"message": "✅ Success! Data saved to Google Sheet."})
+
+    except Exception as e:
+        return jsonify({"error": "An exception occurred during save", "details": str(e)}), 500
+
+# --- Health Check Route (no changes) ---
+@app.route('/', methods=['GET'])
+def health_check():
+    return jsonify({"status": "ok", "message": "Backend is running!"})
 
