@@ -20,7 +20,7 @@ def get_google_creds():
     creds_json_str = base64.b64decode(creds_json_b64).decode('utf-8')
     return json.loads(creds_json_str)
 
-# --- NEW: Endpoint 1 - Perform OCR and return text ---
+# --- Endpoint 1 - Perform OCR and return text (No changes needed here) ---
 @app.route('/api/ocr', methods=['POST'])
 def ocr_handler():
     try:
@@ -30,7 +30,6 @@ def ocr_handler():
         image_file = request.files['image']
         image_content = image_file.read()
 
-        # --- OCR with Google Cloud Vision ---
         creds_info = get_google_creds()
         vision_credentials = service_account.Credentials.from_service_account_info(creds_info)
         vision_client = vision.ImageAnnotatorClient(credentials=vision_credentials)
@@ -45,7 +44,6 @@ def ocr_handler():
         if response.error.message:
             raise Exception(f"Google Vision API Error: {response.error.message}")
 
-        # --- Return ONLY the extracted text ---
         return jsonify({
             "message": "✅ Success! Text extracted.",
             "extractedText": extracted_text
@@ -55,15 +53,17 @@ def ocr_handler():
         return jsonify({"error": "An exception occurred during OCR", "details": str(e)}), 500
 
 
-# --- NEW: Endpoint 2 - Receive corrected text and save to Sheets ---
+# --- Endpoint 2 - Receive corrected text and save to Sheets (UPDATED LOGIC) ---
 @app.route('/api/save', methods=['POST'])
 def save_handler():
     try:
         data = request.get_json()
-        if not data or 'text' not in data:
-            return jsonify({"error": "No text provided in the request."}), 400
+        # **FIX**: Get both text and the sheetName from the request
+        corrected_text = data.get('text')
+        sheet_name = data.get('sheetName')
 
-        corrected_text = data['text']
+        if not corrected_text or not sheet_name:
+            return jsonify({"error": "Text or sheetName not provided in the request."}), 400
 
         # --- Write to Google Sheets ---
         SPREADSHEET_ID = os.environ.get('SPREADSHEET_ID')
@@ -75,17 +75,19 @@ def save_handler():
         service = build('sheets', 'v4', credentials=sheets_credentials)
         sheet = service.spreadsheets()
         
-        # Use the corrected text from the frontend
-        data_to_add = [['Final Data Saved', corrected_text[:1500], '30/09/2025']] # Store more text
+        # **FIX**: Use the dynamic sheet_name from the frontend in the range
+        range_to_update = f"{sheet_name}!A1"
+
+        data_to_add = [['Final Data Saved', corrected_text[:25000], '30/09/2025']] # Increased character limit
         request_body = {'values': data_to_add}
         sheet.values().append(
             spreadsheetId=SPREADSHEET_ID,
-            range='Sheet1!A1',
+            range=range_to_update,
             valueInputOption='USER_ENTERED',
             body=request_body
         ).execute()
         
-        return jsonify({"message": "✅ Success! Data saved to Google Sheet."})
+        return jsonify({"message": f"✅ Success! Data saved to {sheet_name}."})
 
     except Exception as e:
         return jsonify({"error": "An exception occurred during save", "details": str(e)}), 500
