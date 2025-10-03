@@ -82,8 +82,7 @@ def parse_update_list_text(text):
         if quantity_index == -1: continue
         item_name = " ".join(words[:quantity_index]).strip()
         notes = " ".join(words[quantity_index+1:]).strip()
-        # Returns a list of lists for consistency
-        parsed_items.append([today_date, item_name, '', quantity, '', notes]) # Date, Item, Unit, Qty, Size/Type, Notes
+        parsed_items.append([today_date, item_name, '', quantity, '', notes])
     return parsed_items
 
 # --- Function to handle the sheet update logic (no changes) ---
@@ -96,14 +95,13 @@ def update_sheet_data(service, spreadsheet_id, sheet_name, parsed_items):
     data_for_update, updated_item_count = [], 0
 
     for item in parsed_items:
-        # Assumes item format is [Date, Item, Unit, Qty, Size/Type, Notes]
         item_name_lower = item[1].lower() 
         if item_name_lower in item_to_row_map:
             row_number = item_to_row_map[item_name_lower]
             updated_item_count += 1
-            data_for_update.append({'range': f"{sheet_name}!A{row_number}", 'values': [[item[0]]]}) # Date
-            data_for_update.append({'range': f"{sheet_name}!D{row_number}", 'values': [[item[3]]]}) # Quantity
-            data_for_update.append({'range': f"{sheet_name}!F{row_number}", 'values': [[item[5]]]}) # Notes
+            data_for_update.append({'range': f"{sheet_name}!A{row_number}", 'values': [[item[0]]]})
+            data_for_update.append({'range': f"{sheet_name}!D{row_number}", 'values': [[item[3]]]})
+            data_for_update.append({'range': f"{sheet_name}!F{row_number}", 'values': [[item[5]]]})
             
     if not data_for_update: return 0
 
@@ -111,7 +109,7 @@ def update_sheet_data(service, spreadsheet_id, sheet_name, parsed_items):
     service.spreadsheets().values().batchUpdate(spreadsheetId=spreadsheet_id, body=body).execute()
     return updated_item_count
 
-# --- Endpoint 1 - OCR Handler (UPDATED to parse text) ---
+# --- Endpoint 1 - OCR Handler (UPDATED with fallback logic) ---
 @app.route('/api/ocr', methods=['POST'])
 def ocr_handler():
     try:
@@ -128,7 +126,6 @@ def ocr_handler():
         
         extracted_text = response.text_annotations[0].description if response.text_annotations else ""
 
-        # --- NEW: Parse text immediately and send back structured data ---
         columns, rows = [], []
         if "Purchases" in sheet_name:
             columns, rows = [['Item Name', 'Quantity', 'Unit', 'Notes/Size', 'Price']], parse_invoice_text(extracted_text)
@@ -136,15 +133,21 @@ def ocr_handler():
             columns, rows = [['Date', 'Item', 'Unit', 'Quantity']], parse_simple_list_text(extracted_text)
         elif "StoreDemand" in sheet_name:
             columns, rows = [['Date', 'Item', 'Unit', 'Quantity', 'Size/Type', 'Notes']], parse_update_list_text(extracted_text)
-        else: # Default fallback
+        else:
             columns, rows = [['Date', 'Item', 'Unit', 'Quantity']], parse_simple_list_text(extracted_text)
+
+        # --- NEW: Robust Fallback Logic ---
+        if not rows and extracted_text:
+            columns = [['Extracted Text']] # A single column header
+            # Split the text by lines and format it for the table
+            rows = [[line] for line in extracted_text.strip().split('\n') if line.strip()]
 
         return jsonify({"columns": columns, "rows": rows})
 
     except Exception as e:
         return jsonify({"error": "An exception occurred during OCR", "details": str(e)}), 500
 
-# --- Endpoint 2 - Save Handler (UPDATED to accept structured data) ---
+# --- Endpoint 2 - Save Handler (UPDATED to handle fallback data) ---
 @app.route('/api/save', methods=['POST'])
 def save_handler():
     try:
@@ -158,23 +161,29 @@ def save_handler():
         SPREADSHEET_ID = os.environ.get('SPREADSHEET_ID')
         if not SPREADSHEET_ID: raise ValueError("SPREADSHEET_ID environment variable not set.")
 
-        # --- INTELLIGENT PARSING AND SAVING ---
         if "StoreDemand" in sheet_name:
-            # Reformat rows for update function
-            update_data = [{"name": row[1], "quantity": row[3], "notes": row[5]} for row in rows_to_save]
-            updated_count = update_sheet_data(service, SPREADSHEET_ID, sheet_name, update_data)
-            return jsonify({"message": f"✅ Success! {updated_count} items updated in {sheet_name}."})
-        else: # Handle Purchases and Inventory Out with append logic
+            # Check if the data is structured or fallback
+            if len(rows_to_save[0]) > 1: # Structured data
+                update_data = [{"name": row[1], "quantity": row[3], "notes": row[5]} for row in rows_to_save]
+                updated_count = update_sheet_data(service, SPREADSHEET_ID, sheet_name, update_data)
+                return jsonify({"message": f"✅ Success! {updated_count} items updated in {sheet_name}."})
+            else: # Fallback data - just append it as notes
+                 header = [['Notes (Unparsed)']]
+            
+        else:
             header = []
             if "Purchases" in sheet_name:
                 header = [['Item Name', 'Quantity', 'Unit', 'Notes/Size', 'Price']]
             elif "Inventory" in sheet_name:
                 header = [['Date', 'Item', 'Unit', 'Quantity']]
-            
-            data_to_add = header + rows_to_save
-            body = {'values': data_to_add}
-            service.spreadsheets().values().append(spreadsheetId=SPREADSHEET_ID, range=f"{sheet_name}!A1", valueInputOption='USER_ENTERED', body=body).execute()
-            return jsonify({"message": f"✅ Success! {len(rows_to_save)} items saved to {sheet_name}."})
+            # NEW: Handle fallback data for append sheets
+            if len(rows_to_save[0]) == 1:
+                header = [['Notes (Unparsed)']]
+
+        data_to_add = header + rows_to_save
+        body = {'values': data_to_add}
+        service.spreadsheets().values().append(spreadsheetId=SPREADSHEET_ID, range=f"{sheet_name}!A1", valueInputOption='USER_ENTERED', body=body).execute()
+        return jsonify({"message": f"✅ Success! {len(rows_to_save)} items saved to {sheet_name}."})
 
     except Exception as e:
         return jsonify({"error": "An exception occurred during save", "details": str(e)}), 500
