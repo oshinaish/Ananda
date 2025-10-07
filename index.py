@@ -45,7 +45,7 @@ def parse_invoice_text(text):
         parsed_items.append([item_name, quantity, unit, notes, price])
     return parsed_items
 
-# --- PARSER 2: For Simple Appends (Inventory Out) - IMPROVED LOGIC ---
+# --- PARSER 2: For Simple Appends (Inventory Out) (no changes) ---
 def parse_simple_list_text(text):
     lines = text.strip().split('\n')
     parsed_items = []
@@ -55,79 +55,75 @@ def parse_simple_list_text(text):
         line_lower = line.lower()
         if not line.strip() or any(keyword in line_lower for keyword in ignore_keywords):
             continue
-        
         words = line.strip().split()
         if len(words) < 2: continue
-
         quantity, quantity_index = '', -1
-        # Find the first number, which is likely the quantity
         for i, word in enumerate(words):
             if word.replace('.', '', 1).isdigit():
                 quantity, quantity_index = word, i
                 break
-        
         if quantity_index == -1: continue
-
-        # Assume the word before is the unit (if it's not a number)
-        unit = ''
-        item_name_end_index = quantity_index
+        unit, item_name_end_index = '', quantity_index
         if quantity_index > 0 and not words[quantity_index - 1].replace('.', '', 1).isdigit():
-            unit = words[quantity_index - 1]
-            item_name_end_index = quantity_index - 1
-
+            unit, item_name_end_index = words[quantity_index - 1], quantity_index - 1
         item_name = " ".join(words[:item_name_end_index]).strip()
-        
         if item_name:
              parsed_items.append([today_date, item_name, unit, quantity])
     return parsed_items
 
-# --- PARSER 3: For Store Demand (Update Logic) - no changes ---
-def parse_update_list_text(text):
+# --- NEW PARSER 3: For Store Demand (Rectified Logic) ---
+def parse_store_demand_text(text):
+    """
+    Parses text into four columns: S. no., Item, Unit, Quantity.
+    This is now an append operation, not an update.
+    """
     lines = text.strip().split('\n')
     parsed_items = []
-    today_date = date.today().strftime("%Y-%m-%d")
-    ignore_keywords = ['date', 'item', 'unit', 'quantity', 'size', 'type', 'notes', 'demand']
+    s_no = 1
+    ignore_keywords = ['date', 'item', 'unit', 'quantity', 'demand', 's.no', 'sno']
     for line in lines:
         line_lower = line.lower()
-        if not line.strip() or any(keyword in line_lower for keyword in ignore_keywords): continue
+        # Skip lines that are likely headers or empty
+        if not line.strip() or any(keyword in line_lower for keyword in ignore_keywords):
+            continue
+        
         words = line.strip().split()
+        # Strip leading serial number if it exists in the text
+        if words and words[0].replace('.', '').isdigit():
+            words = words[1:]
+        
         if len(words) < 2: continue
+
         quantity, quantity_index = '', -1
-        for i, word in enumerate(words):
-            if word.replace('.', '', 1).isdigit():
-                quantity, quantity_index = word, i
+        # Find the last word that is a number (most likely the quantity)
+        for i in range(len(words) - 1, -1, -1):
+            if words[i].replace('.','',1).isdigit():
+                quantity, quantity_index = words[i], i
                 break
-        if quantity_index == -1: continue
-        item_name = " ".join(words[:quantity_index]).strip()
-        notes = " ".join(words[quantity_index+1:]).strip()
-        parsed_items.append([today_date, item_name, '', quantity, '', notes])
+        
+        if quantity_index == -1: continue # Skip if no quantity is found
+
+        # Assume the word before quantity is the unit, and everything before that is the item name
+        unit = ''
+        item_name = ''
+        if quantity_index > 0:
+            unit = words[quantity_index - 1]
+            item_name = " ".join(words[:quantity_index - 1]).strip()
+        else: # Quantity is the first word, so the rest is the item name
+            item_name = " ".join(words[1:]).strip()
+        
+        # A check in case the unit was misidentified as the only part of the item name
+        if not item_name and unit:
+            item_name = unit
+            unit = ''
+
+        if item_name:
+            parsed_items.append([str(s_no), item_name, unit, quantity])
+            s_no += 1
+            
     return parsed_items
 
-# --- Function to handle the sheet update logic (no changes) ---
-def update_sheet_data(service, spreadsheet_id, sheet_name, parsed_items):
-    range_to_read = f"{sheet_name}!B:B"
-    result = service.spreadsheets().values().get(spreadsheetId=spreadsheet_id, range=range_to_read).execute()
-    existing_items = result.get('values', [])
-    item_to_row_map = {item[0].strip().lower(): i + 1 for i, item in enumerate(existing_items) if item}
-    
-    data_for_update, updated_item_count = [], 0
-
-    for item in parsed_items:
-        item_name_lower = item[1].lower() 
-        if item_name_lower in item_to_row_map:
-            row_number = item_to_row_map[item_name_lower]
-            updated_item_count += 1
-            data_for_update.append({'range': f"{sheet_name}!A{row_number}", 'values': [[item[0]]]})
-            data_for_update.append({'range': f"{sheet_name}!D{row_number}", 'values': [[item[3]]]})
-            data_for_update.append({'range': f"{sheet_name}!F{row_number}", 'values': [[item[5]]]})
-            
-    if not data_for_update: return 0
-
-    body = {'valueInputOption': 'USER_ENTERED', 'data': data_for_update}
-    service.spreadsheets().values().batchUpdate(spreadsheetId=spreadsheet_id, body=body).execute()
-    return updated_item_count
-
-# --- Endpoint 1 - OCR Handler (no changes) ---
+# --- Endpoint 1 - OCR Handler (UPDATED to use new parser) ---
 @app.route('/api/ocr', methods=['POST'])
 def ocr_handler():
     try:
@@ -150,8 +146,9 @@ def ocr_handler():
         elif "Inventory" in sheet_name:
             columns, rows = [['Date', 'Item', 'Unit', 'Quantity']], parse_simple_list_text(extracted_text)
         elif "StoreDemand" in sheet_name:
-            columns, rows = [['Date', 'Item', 'Unit', 'Quantity', 'Size/Type', 'Notes']], parse_update_list_text(extracted_text)
-        else:
+            # RECTIFIED: Use the new dedicated parser and column headers
+            columns, rows = [['S. no.', 'Item', 'Unit', 'Quantity']], parse_store_demand_text(extracted_text)
+        else: # Fallback
             columns, rows = [['Date', 'Item', 'Unit', 'Quantity']], parse_simple_list_text(extracted_text)
 
         if not rows and extracted_text:
@@ -163,7 +160,7 @@ def ocr_handler():
     except Exception as e:
         return jsonify({"error": "An exception occurred during OCR", "details": str(e)}), 500
 
-# --- Endpoint 2 - Save Handler (IMPROVED LOGIC) ---
+# --- Endpoint 2 - Save Handler (UPDATED to handle new Store Demand format) ---
 @app.route('/api/save', methods=['POST'])
 def save_handler():
     try:
@@ -178,30 +175,28 @@ def save_handler():
         if not SPREADSHEET_ID: raise ValueError("SPREADSHEET_ID environment variable not set.")
 
         is_fallback = len(rows_to_save[0]) == 1
+        
+        # RECTIFIED: The complex "update" logic for Store Demand has been removed.
+        # It is now treated as a simple append operation like the others.
+        header = []
+        if is_fallback:
+            header = [['Notes (Unparsed)']]
+        elif "Purchases" in sheet_name:
+            header = [['Item Name', 'Quantity', 'Unit', 'Notes/Size', 'Price']]
+        elif "Inventory" in sheet_name:
+            header = [['Date', 'Item', 'Unit', 'Quantity']]
+        elif "StoreDemand" in sheet_name:
+            header = [['S. no.', 'Item', 'Unit', 'Quantity']]
 
-        if "StoreDemand" in sheet_name and not is_fallback:
-            update_data = [{"name": row[1], "quantity": row[3], "notes": row[5]} for row in rows_to_save]
-            updated_count = update_sheet_data(service, SPREADSHEET_ID, sheet_name, update_data)
-            return jsonify({"message": f"✅ Success! {updated_count} items updated in {sheet_name}."})
-        else:
-            # Handles all "append" operations: Purchases, Inventory, and fallbacks
-            header = []
-            if is_fallback:
-                header = [['Notes (Unparsed)']]
-            elif "Purchases" in sheet_name:
-                header = [['Item Name', 'Quantity', 'Unit', 'Notes/Size', 'Price']]
-            elif "Inventory" in sheet_name:
-                header = [['Date', 'Item', 'Unit', 'Quantity']]
-
-            data_to_add = header + rows_to_save
-            body = {'values': data_to_add}
-            service.spreadsheets().values().append(
-                spreadsheetId=SPREADSHEET_ID,
-                range=f"{sheet_name}!A1",
-                valueInputOption='USER_ENTERED',
-                body=body
-            ).execute()
-            return jsonify({"message": f"✅ Success! {len(rows_to_save)} items saved to {sheet_name}."})
+        data_to_add = header + rows_to_save
+        body = {'values': data_to_add}
+        service.spreadsheets().values().append(
+            spreadsheetId=SPREADSHEET_ID,
+            range=f"{sheet_name}!A1",
+            valueInputOption='USER_ENTERED',
+            body=body
+        ).execute()
+        return jsonify({"message": f"✅ Success! {len(rows_to_save)} items saved to {sheet_name}."})
 
     except Exception as e:
         return jsonify({"error": "An exception occurred during save", "details": str(e)}), 500
