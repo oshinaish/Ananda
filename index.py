@@ -107,14 +107,27 @@ def parse_store_demand_text(text):
         unit = ''
         item_name = ''
         
-        # Check if the word before the quantity is a known unit
-        if quantity_index > 0 and words[quantity_index - 1].lower().rstrip('.') in common_units:
-            unit = words[quantity_index - 1]
-            item_name = " ".join(words[:quantity_index - 1]).strip()
-        else:
-            # If not a known unit, it's part of the item name
-            unit = ''
-            item_name = " ".join(words[:quantity_index]).strip()
+        if quantity_index > 0:
+            # Check if the word before the quantity is a known unit
+            if words[quantity_index - 1].lower().rstrip('.') in common_units:
+                unit = words[quantity_index - 1]
+                item_name = " ".join(words[:quantity_index - 1]).strip()
+            else:
+                # If not a known unit, it's part of the item name
+                unit = ''
+                item_name = " ".join(words[:quantity_index]).strip()
+        # NEW: Handle cases where the quantity is the first word
+        elif quantity_index == 0:
+            item_words = words[1:]
+            if item_words:
+                # Check if the first word after quantity is a known unit
+                if item_words[0].lower().rstrip('.') in common_units:
+                    unit = item_words[0]
+                    item_name = " ".join(item_words[1:]).strip()
+                else:
+                    unit = ''
+                    item_name = " ".join(item_words).strip()
+
 
         if item_name:
             parsed_items.append([str(s_no), item_name, unit, quantity])
