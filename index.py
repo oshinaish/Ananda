@@ -13,6 +13,39 @@ from google.cloud import vision
 app = Flask(__name__)
 CORS(app)
 
+# --- CONFIGURATION: STORE DEMAND ITEM LIST (UPDATED FROM UPLOADED FILES) ---
+# IMPORTANT: This list is compiled from the images you provided.
+# Longer, more specific names are listed first for better matching accuracy.
+KNOWN_STORE_DEMAND_ITEMS = sorted([
+    # Prepared Food & Raw Materials
+    'Kacha Peanut Chilke wala', 'Sarson (Mustard seed)', 'Pineapple Halwa', 'Filter Coffee Pow.', 'Whole red chilli', 
+    'Fortune Refined', 'Roasted Peanuts', 'Roasted Chana', 'Red Chutney', 'Dosa Batter', 'Idli Batter', 
+    'Vada Batter', 'Onion masala', 'Upma Sooji', 'Garlic Paste', 'Podi Masala', 'Dhania Whole', 
+    'Staff Dal', 'Sarson Tel', 'Meetha Soda', 'Soya Badi', 'Chai Patti', 'Kali Mirch', 'Desi Ghee', 
+    'Sambhar', 'Rawa mix', 'Sugar',
+    'Milk', 'Rice', 'Atta', 'Jeera', 'Kaju', 'Poha', 'Besan', 'Achar', 'Chhole', 'Rajma', 
+    'Chana Dal', 
+    
+    # Vegetables & Masala
+    'Green Chillies(Hari Mirch)', 'Coriander leaves(Dhaniyan Patta)', 'Curry Leaves (Kari Patta)', 
+    'Banana Leaves(Kela Patta)', 'Coconut Crush', 'Potato(aloo)', 'Mint(Pudina)', 'Staff Veg.', 
+    'Deggi Mirch', 'Garam Masala', 'Hing Powder', 'Dhaniya Powder', 'Kitchen King', 'Chat Masala', 
+    'Haldi Powder', 'Hari Ilaychi', 'Tata Salt', 'Black Salt', 'Onions', 'Tomatoes', 'Ginger', 
+    'Carrot', 'Beans', 'Garlic', 'Lemon',
+    
+    # Disposal
+    '50ML Container', '100ML Container', '250ML Container', '300ML Container', '500ML Container', 
+    'Podi Idli Container', 'Silver lifafa', 'Vada Lifafa', 'Dosa Box Small', 'Dosa Box Big', 
+    '16*20 Biopolythene', '13*16 Biopolythene', 'Bio Garbagebag Big Size', 'Printer Roll', 
+    'Bio Spoon', 'Wooden Plates', 'Paper Bowl', 'Filter Coffee Glass', 'Masala Chhachh Glass', 
+    'Filter Coffee Packaging', 'Masala Chhachh Packaging', 'Clean Wrap', 'Butter Paper', 'Delivery Bag',
+    'Tape', 'Tissues', 'Chef Cap'
+], key=len, reverse=True)
+
+# A set of common units for parsing (Updated to include 'Batch' and common short forms)
+COMMON_UNITS = {'kg', 'g', 'gm', 'ltr', 'lt', 'ml', 'pc', 'pcs', 'dozen', 'box', 'pkt', 'packet', 'tin', 'bag', 'Batch', 'batch', 'pieces', 'bundle'}
+
+
 # --- Function to get Google API credentials (no changes) ---
 def get_google_creds():
     creds_json_b64 = os.environ.get('GOOGLE_CREDENTIALS_BASE64')
@@ -32,16 +65,31 @@ def parse_invoice_text(text):
         if not line.strip() or any(keyword in line_lower for keyword in header_keywords) or not any(char.isdigit() for char in line):
             continue
         item_name, quantity, unit, notes, price = line, '', '', '', ''
-        match = re.search(r'(\d+\.?\d*)\s*(kg|g|gm|ltr|ml|pc|pcs|dozen|box)\b', line, re.IGNORECASE)
+        match = re.search(r'(\d+\.?\d*)\s*([a-zA-Z]+)?', line, re.IGNORECASE) # Relaxed unit check
+        
         if match:
-            quantity, unit, item_name, notes = match.group(1), match.group(2), line[:match.start()].strip(), line[match.end():].strip()
-        else:
-            match = re.search(r'\d+\.?\d*', line)
-            if match:
-                quantity, item_name, notes = match.group(0), line[:match.start()].strip(), line[match.end():].strip()
+            quantity = match.group(1)
+            unit_candidate = match.group(2) if match.group(2) else ''
+
+            if unit_candidate and unit_candidate.lower() in COMMON_UNITS:
+                unit = unit_candidate
+                # Recalculate item_name and notes based on the regex match position
+                item_name = line[:match.start()].strip()
+                notes = line[match.end():].strip()
+            else:
+                unit = ''
+                # If no unit match, the unit candidate might be part of notes/size
+                item_name = line[:match.start()].strip()
+                notes = line[match.end():].strip()
+                if unit_candidate:
+                    notes = f"{unit_candidate} {notes}".strip()
+
+
         price_match = re.search(r'(Rs\.?|₹)\s*(\d+\.?\d*)', notes, re.IGNORECASE)
         if price_match:
-            price, notes = price_match.group(0), notes.replace(price_match.group(0), '').strip()
+            price = price_match.group(0)
+            notes = notes.replace(price_match.group(0), '').strip()
+            
         parsed_items.append([item_name, quantity, unit, notes, price])
     return parsed_items
 
@@ -71,66 +119,73 @@ def parse_simple_list_text(text):
              parsed_items.append([today_date, item_name, unit, quantity])
     return parsed_items
 
-# --- NEW PARSER 3: For Store Demand (Rectified Logic) ---
+# --- RECTIFIED PARSER 3: For Store Demand (Matching Logic) ---
 def parse_store_demand_text(text):
     """
-    Parses text into four columns: S. no., Item, Unit, Quantity.
-    This is now an append operation, not an update.
+    Parses text into four columns: S. no., Item, Unit, Quantity using KNOWN_STORE_DEMAND_ITEMS for matching.
     """
     lines = text.strip().split('\n')
     parsed_items = []
     s_no = 1
     ignore_keywords = ['date', 'item', 'unit', 'quantity', 'demand', 's.no', 'sno']
-    # A set of common units to help with parsing
-    common_units = {'kg', 'g', 'gm', 'ltr', 'lt', 'ml', 'pc', 'pcs', 'dozen', 'box', 'pkt', 'packet'}
 
     for line in lines:
-        line_lower = line.lower()
-        if not line.strip() or any(keyword in line_lower for keyword in ignore_keywords):
+        line_lower = line.lower().strip()
+        if not line_lower or any(keyword in line_lower for keyword in ignore_keywords):
             continue
         
-        words = line.strip().split()
-        if words and words[0].replace('.', '').isdigit():
-            words = words[1:]
+        # Remove leading S. no. if present
+        cleaned_line = line.strip()
+        if cleaned_line.split() and cleaned_line.split()[0].replace('.', '').isdigit():
+             cleaned_line = " ".join(cleaned_line.split()[1:])
         
-        if len(words) < 1: continue
-
-        quantity, quantity_index = '', -1
-        for i in range(len(words) - 1, -1, -1):
-            if words[i].replace('.','',1).isdigit():
-                quantity, quantity_index = words[i], i
-                break
+        # 1. Try to match a known item name (must be a whole word match)
+        matched_item = None
+        match_end_index = -1
         
-        if quantity_index == -1: continue
-
-        # --- Improved Unit and Item Name Logic ---
-        unit = ''
-        item_name = ''
+        for item in KNOWN_STORE_DEMAND_ITEMS:
+            # Look for the item name in the cleaned line
+            item_lower = item.lower()
+            if item_lower in cleaned_line.lower():
+                # Ensure it's a whole word match or followed by numbers/units
+                pattern = r'\b' + re.escape(item_lower) + r'\b'
+                match = re.search(pattern, cleaned_line.lower())
+                
+                if match:
+                    matched_item = item
+                    # Calculate where the item name ends in the original cleaned_line
+                    match_end_index = match.end() + (len(cleaned_line) - len(cleaned_line.lstrip()))
+                    break
         
-        if quantity_index > 0:
-            # Check if the word before the quantity is a known unit
-            if words[quantity_index - 1].lower().rstrip('.') in common_units:
-                unit = words[quantity_index - 1]
-                item_name = " ".join(words[:quantity_index - 1]).strip()
-            else:
-                # If not a known unit, it's part of the item name
-                unit = ''
-                item_name = " ".join(words[:quantity_index]).strip()
-        # NEW: Handle cases where the quantity is the first word
-        elif quantity_index == 0:
-            item_words = words[1:]
-            if item_words:
-                # Check if the first word after quantity is a known unit
-                if item_words[0].lower().rstrip('.') in common_units:
-                    unit = item_words[0]
-                    item_name = " ".join(item_words[1:]).strip()
-                else:
-                    unit = ''
-                    item_name = " ".join(item_words).strip()
+        if not matched_item:
+            continue
 
+        # 2. Get the part of the string AFTER the matched item
+        remaining_text = cleaned_line[match_end_index:].strip()
 
-        if item_name:
-            parsed_items.append([str(s_no), item_name, unit, quantity])
+        # 3. Extract Quantity and Unit from remaining_text
+        quantity, unit = '', ''
+
+        # Search for the quantity (number) and optional unit right before or after it
+        # This regex looks for: (unit)? (quantity) or (quantity) (unit)?
+        match = re.search(r'(([a-zA-Z]+)\s*)?(\d+\.?\d*)\s*([a-zA-Z]+)?', remaining_text, re.IGNORECASE)
+        
+        if match:
+            # Group 3 is always the quantity (number)
+            quantity = match.group(3)
+            
+            # Check Group 2 (unit before quantity)
+            unit_before = match.group(2)
+            if unit_before and unit_before.lower() in COMMON_UNITS:
+                unit = unit_before
+            
+            # Check Group 4 (unit after quantity)
+            unit_after = match.group(4)
+            if unit_after and unit_after.lower() in COMMON_UNITS:
+                unit = unit_after
+
+        if quantity:
+            parsed_items.append([str(s_no), matched_item, unit, quantity])
             s_no += 1
             
     return parsed_items
@@ -158,11 +213,12 @@ def ocr_handler():
         elif "Inventory" in sheet_name:
             columns, rows = [['Date', 'Item', 'Unit', 'Quantity']], parse_simple_list_text(extracted_text)
         elif "StoreDemand" in sheet_name:
-            # RECTIFIED: Use the new dedicated parser and column headers
+            # Use the new dedicated parser and column headers
             columns, rows = [['S. no.', 'Item', 'Unit', 'Quantity']], parse_store_demand_text(extracted_text)
         else: # Fallback
             columns, rows = [['Date', 'Item', 'Unit', 'Quantity']], parse_simple_list_text(extracted_text)
 
+        # Fallback to single column if no structured items were found
         if not rows and extracted_text:
             columns = [['Extracted Text']]
             rows = [[line] for line in extracted_text.strip().split('\n') if line.strip()]
@@ -172,7 +228,7 @@ def ocr_handler():
     except Exception as e:
         return jsonify({"error": "An exception occurred during OCR", "details": str(e)}), 500
 
-# --- Endpoint 2 - Save Handler (UPDATED to handle new Store Demand format) ---
+# --- Endpoint 2 - Save Handler (handles all appends) ---
 @app.route('/api/save', methods=['POST'])
 def save_handler():
     try:
@@ -188,8 +244,6 @@ def save_handler():
 
         is_fallback = len(rows_to_save[0]) == 1
         
-        # RECTIFIED: The complex "update" logic for Store Demand has been removed.
-        # It is now treated as a simple append operation like the others.
         header = []
         if is_fallback:
             header = [['Notes (Unparsed)']]
@@ -217,4 +271,3 @@ def save_handler():
 @app.route('/', methods=['GET'])
 def health_check():
     return jsonify({"status": "ok", "message": "Backend is running!"})
-
