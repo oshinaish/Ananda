@@ -22,7 +22,7 @@ def get_google_creds():
     creds_json_str = base64.b64decode(creds_json_b64).decode('utf-8')
     return json.loads(creds_json_str)
 
-# --- PARSER 1: For Invoices ---
+# --- PARSER 1: For Invoices (no changes) ---
 def parse_invoice_text(text):
     lines = text.strip().split('\n')
     parsed_items = []
@@ -45,7 +45,7 @@ def parse_invoice_text(text):
         parsed_items.append([item_name, quantity, unit, notes, price])
     return parsed_items
 
-# --- PARSER 2: For Simple Appends (Inventory Out) ---
+# --- PARSER 2: For Simple Appends (Inventory Out) - IMPROVED LOGIC ---
 def parse_simple_list_text(text):
     lines = text.strip().split('\n')
     parsed_items = []
@@ -55,15 +55,33 @@ def parse_simple_list_text(text):
         line_lower = line.lower()
         if not line.strip() or any(keyword in line_lower for keyword in ignore_keywords):
             continue
+        
         words = line.strip().split()
         if len(words) < 2: continue
-        quantity = words[-1]
-        if not quantity.replace('.','',1).isdigit(): continue
-        unit, item_name = (words[-2], " ".join(words[:-2])) if len(words) > 2 else ('', " ".join(words[:-1]))
-        parsed_items.append([today_date, item_name, unit, quantity])
+
+        quantity, quantity_index = '', -1
+        # Find the first number, which is likely the quantity
+        for i, word in enumerate(words):
+            if word.replace('.', '', 1).isdigit():
+                quantity, quantity_index = word, i
+                break
+        
+        if quantity_index == -1: continue
+
+        # Assume the word before is the unit (if it's not a number)
+        unit = ''
+        item_name_end_index = quantity_index
+        if quantity_index > 0 and not words[quantity_index - 1].replace('.', '', 1).isdigit():
+            unit = words[quantity_index - 1]
+            item_name_end_index = quantity_index - 1
+
+        item_name = " ".join(words[:item_name_end_index]).strip()
+        
+        if item_name:
+             parsed_items.append([today_date, item_name, unit, quantity])
     return parsed_items
 
-# --- PARSER 3: For Store Demand (Update Logic) ---
+# --- PARSER 3: For Store Demand (Update Logic) - no changes ---
 def parse_update_list_text(text):
     lines = text.strip().split('\n')
     parsed_items = []
@@ -109,7 +127,7 @@ def update_sheet_data(service, spreadsheet_id, sheet_name, parsed_items):
     service.spreadsheets().values().batchUpdate(spreadsheetId=spreadsheet_id, body=body).execute()
     return updated_item_count
 
-# --- Endpoint 1 - OCR Handler (UPDATED with fallback logic) ---
+# --- Endpoint 1 - OCR Handler (no changes) ---
 @app.route('/api/ocr', methods=['POST'])
 def ocr_handler():
     try:
@@ -136,10 +154,8 @@ def ocr_handler():
         else:
             columns, rows = [['Date', 'Item', 'Unit', 'Quantity']], parse_simple_list_text(extracted_text)
 
-        # --- NEW: Robust Fallback Logic ---
         if not rows and extracted_text:
-            columns = [['Extracted Text']] # A single column header
-            # Split the text by lines and format it for the table
+            columns = [['Extracted Text']]
             rows = [[line] for line in extracted_text.strip().split('\n') if line.strip()]
 
         return jsonify({"columns": columns, "rows": rows})
@@ -147,7 +163,7 @@ def ocr_handler():
     except Exception as e:
         return jsonify({"error": "An exception occurred during OCR", "details": str(e)}), 500
 
-# --- Endpoint 2 - Save Handler (UPDATED to handle fallback data) ---
+# --- Endpoint 2 - Save Handler (IMPROVED LOGIC) ---
 @app.route('/api/save', methods=['POST'])
 def save_handler():
     try:
@@ -161,29 +177,31 @@ def save_handler():
         SPREADSHEET_ID = os.environ.get('SPREADSHEET_ID')
         if not SPREADSHEET_ID: raise ValueError("SPREADSHEET_ID environment variable not set.")
 
-        if "StoreDemand" in sheet_name:
-            # Check if the data is structured or fallback
-            if len(rows_to_save[0]) > 1: # Structured data
-                update_data = [{"name": row[1], "quantity": row[3], "notes": row[5]} for row in rows_to_save]
-                updated_count = update_sheet_data(service, SPREADSHEET_ID, sheet_name, update_data)
-                return jsonify({"message": f"✅ Success! {updated_count} items updated in {sheet_name}."})
-            else: # Fallback data - just append it as notes
-                 header = [['Notes (Unparsed)']]
-            
+        is_fallback = len(rows_to_save[0]) == 1
+
+        if "StoreDemand" in sheet_name and not is_fallback:
+            update_data = [{"name": row[1], "quantity": row[3], "notes": row[5]} for row in rows_to_save]
+            updated_count = update_sheet_data(service, SPREADSHEET_ID, sheet_name, update_data)
+            return jsonify({"message": f"✅ Success! {updated_count} items updated in {sheet_name}."})
         else:
+            # Handles all "append" operations: Purchases, Inventory, and fallbacks
             header = []
-            if "Purchases" in sheet_name:
+            if is_fallback:
+                header = [['Notes (Unparsed)']]
+            elif "Purchases" in sheet_name:
                 header = [['Item Name', 'Quantity', 'Unit', 'Notes/Size', 'Price']]
             elif "Inventory" in sheet_name:
                 header = [['Date', 'Item', 'Unit', 'Quantity']]
-            # NEW: Handle fallback data for append sheets
-            if len(rows_to_save[0]) == 1:
-                header = [['Notes (Unparsed)']]
 
-        data_to_add = header + rows_to_save
-        body = {'values': data_to_add}
-        service.spreadsheets().values().append(spreadsheetId=SPREADSHEET_ID, range=f"{sheet_name}!A1", valueInputOption='USER_ENTERED', body=body).execute()
-        return jsonify({"message": f"✅ Success! {len(rows_to_save)} items saved to {sheet_name}."})
+            data_to_add = header + rows_to_save
+            body = {'values': data_to_add}
+            service.spreadsheets().values().append(
+                spreadsheetId=SPREADSHEET_ID,
+                range=f"{sheet_name}!A1",
+                valueInputOption='USER_ENTERED',
+                body=body
+            ).execute()
+            return jsonify({"message": f"✅ Success! {len(rows_to_save)} items saved to {sheet_name}."})
 
     except Exception as e:
         return jsonify({"error": "An exception occurred during save", "details": str(e)}), 500
