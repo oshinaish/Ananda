@@ -81,41 +81,40 @@ def parse_store_demand_text(text):
     parsed_items = []
     s_no = 1
     ignore_keywords = ['date', 'item', 'unit', 'quantity', 'demand', 's.no', 'sno']
+    # A set of common units to help with parsing
+    common_units = {'kg', 'g', 'gm', 'ltr', 'lt', 'ml', 'pc', 'pcs', 'dozen', 'box', 'pkt', 'packet'}
+
     for line in lines:
         line_lower = line.lower()
-        # Skip lines that are likely headers or empty
         if not line.strip() or any(keyword in line_lower for keyword in ignore_keywords):
             continue
         
         words = line.strip().split()
-        # Strip leading serial number if it exists in the text
         if words and words[0].replace('.', '').isdigit():
             words = words[1:]
         
-        if len(words) < 2: continue
+        if len(words) < 1: continue
 
         quantity, quantity_index = '', -1
-        # Find the last word that is a number (most likely the quantity)
         for i in range(len(words) - 1, -1, -1):
             if words[i].replace('.','',1).isdigit():
                 quantity, quantity_index = words[i], i
                 break
         
-        if quantity_index == -1: continue # Skip if no quantity is found
+        if quantity_index == -1: continue
 
-        # Assume the word before quantity is the unit, and everything before that is the item name
+        # --- Improved Unit and Item Name Logic ---
         unit = ''
         item_name = ''
-        if quantity_index > 0:
+        
+        # Check if the word before the quantity is a known unit
+        if quantity_index > 0 and words[quantity_index - 1].lower().rstrip('.') in common_units:
             unit = words[quantity_index - 1]
             item_name = " ".join(words[:quantity_index - 1]).strip()
-        else: # Quantity is the first word, so the rest is the item name
-            item_name = " ".join(words[1:]).strip()
-        
-        # A check in case the unit was misidentified as the only part of the item name
-        if not item_name and unit:
-            item_name = unit
+        else:
+            # If not a known unit, it's part of the item name
             unit = ''
+            item_name = " ".join(words[:quantity_index]).strip()
 
         if item_name:
             parsed_items.append([str(s_no), item_name, unit, quantity])
