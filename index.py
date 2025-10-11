@@ -1,11 +1,18 @@
 # Main Python file (index.py) for Vercel
+
 import os
 import json
 import base64
 import re
 from datetime import date
+from io import BytesIO
+
+# Use Flask for routing and request handling on Vercel
 from flask import Flask, request, jsonify
 from flask_cors import CORS
+
+# NOTE: Google API imports are kept global here as you are using Flask/WSGI.
+# This generally works better than the pure Vercel handler.
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from google.cloud import vision
@@ -13,17 +20,22 @@ from google.cloud import vision
 app = Flask(__name__)
 CORS(app)
 
-# --- Function to get Google API credentials (no changes) ---
+# --- Configuration & Auth Setup ---
+
 def get_google_creds():
+    """Retrieves and decodes service account credentials from the environment."""
     creds_json_b64 = os.environ.get('GOOGLE_CREDENTIALS_BASE64')
     if not creds_json_b64:
-        raise ValueError("GOOGLE_CREDENTIALS_BASE64 environment variable not found.")
+        # NOTE: Using a descriptive error for Vercel logs
+        raise ValueError("GOOGLE_CREDENTIALS_BASE64 environment variable not found. Check Vercel settings.")
     
     creds_json_str = base64.b64decode(creds_json_b64).decode('utf-8')
     return json.loads(creds_json_str)
 
-# --- PARSER 1: For Invoices (no changes) ---
+# --- Parser Functions (As Provided) ---
+
 def parse_invoice_text(text):
+    """Parses text for Invoices (5 columns)."""
     lines = text.strip().split('\n')
     parsed_items = []
     header_keywords = ['invoice', 'bill', 'receipt', 'date', 'total', 'gst', 'amount', 'item', 'qty', 'hsn']
@@ -45,8 +57,8 @@ def parse_invoice_text(text):
         parsed_items.append([item_name, quantity, unit, notes, price])
     return parsed_items
 
-# --- PARSER 2: For Simple Appends (Inventory Out) (no changes) ---
 def parse_simple_list_text(text):
+    """Parses text for simple Inventory Out (4 columns: Date, Item, Unit, Quantity)."""
     lines = text.strip().split('\n')
     parsed_items = []
     today_date = date.today().strftime("%Y-%m-%d")
@@ -68,20 +80,15 @@ def parse_simple_list_text(text):
             unit, item_name_end_index = words[quantity_index - 1], quantity_index - 1
         item_name = " ".join(words[:item_name_end_index]).strip()
         if item_name:
-             parsed_items.append([today_date, item_name, unit, quantity])
+            parsed_items.append([today_date, item_name, unit, quantity])
     return parsed_items
 
-# --- NEW PARSER 3: For Store Demand (Rectified Logic) ---
 def parse_store_demand_text(text):
-    """
-    Parses text into four columns: S. no., Item, Unit, Quantity.
-    This is now an append operation, not an update.
-    """
+    """Parses text for Store Demand (4 columns: S. no., Item, Unit, Quantity)."""
     lines = text.strip().split('\n')
     parsed_items = []
     s_no = 1
     ignore_keywords = ['date', 'item', 'unit', 'quantity', 'demand', 's.no', 'sno']
-    # A set of common units to help with parsing
     common_units = {'kg', 'g', 'gm', 'ltr', 'lt', 'ml', 'pc', 'pcs', 'dozen', 'box', 'pkt', 'packet'}
 
     for line in lines:
@@ -103,16 +110,13 @@ def parse_store_demand_text(text):
         
         if quantity_index == -1: continue
 
-        # --- Improved Unit and Item Name Logic ---
         unit = ''
         item_name = ''
         
-        # Check if the word before the quantity is a known unit
         if quantity_index > 0 and words[quantity_index - 1].lower().rstrip('.') in common_units:
             unit = words[quantity_index - 1]
             item_name = " ".join(words[:quantity_index - 1]).strip()
         else:
-            # If not a known unit, it's part of the item name
             unit = ''
             item_name = " ".join(words[:quantity_index]).strip()
 
@@ -122,7 +126,9 @@ def parse_store_demand_text(text):
             
     return parsed_items
 
-# --- Endpoint 1 - OCR Handler (UPDATED to use new parser) ---
+
+# --- Endpoint 1: OCR Handler ---
+
 @app.route('/api/ocr', methods=['POST'])
 def ocr_handler():
     try:
@@ -131,25 +137,29 @@ def ocr_handler():
         sheet_name = request.form.get('sheetName', '')
         image_content = request.files['image'].read()
         
+        # 1. Vision API Authentication
         creds_info = get_google_creds()
         vision_credentials = service_account.Credentials.from_service_account_info(creds_info)
         vision_client = vision.ImageAnnotatorClient(credentials=vision_credentials)
+        
+        # 2. OCR Detection
         response = vision_client.document_text_detection(image=vision.Image(content=image_content))
         if response.error.message: raise Exception(f"Google Vision API Error: {response.error.message}")
         
         extracted_text = response.text_annotations[0].description if response.text_annotations else ""
 
+        # 3. Parsing and Column Mapping
         columns, rows = [], []
         if "Purchases" in sheet_name:
             columns, rows = [['Item Name', 'Quantity', 'Unit', 'Notes/Size', 'Price']], parse_invoice_text(extracted_text)
         elif "Inventory" in sheet_name:
             columns, rows = [['Date', 'Item', 'Unit', 'Quantity']], parse_simple_list_text(extracted_text)
         elif "StoreDemand" in sheet_name:
-            # RECTIFIED: Use the new dedicated parser and column headers
             columns, rows = [['S. no.', 'Item', 'Unit', 'Quantity']], parse_store_demand_text(extracted_text)
-        else: # Fallback
+        else: # Fallback for unmapped sheets
             columns, rows = [['Date', 'Item', 'Unit', 'Quantity']], parse_simple_list_text(extracted_text)
 
+        # Fallback for failed parsing (shows raw text in one column)
         if not rows and extracted_text:
             columns = [['Extracted Text']]
             rows = [[line] for line in extracted_text.strip().split('\n') if line.strip()]
@@ -157,50 +167,61 @@ def ocr_handler():
         return jsonify({"columns": columns, "rows": rows})
 
     except Exception as e:
+        # Note: If the error is the 'issubclass' one, this exception handler won't catch it
         return jsonify({"error": "An exception occurred during OCR", "details": str(e)}), 500
 
-# --- Endpoint 2 - Save Handler (UPDATED to handle new Store Demand format) ---
+# --- Endpoint 2: Save Handler (FIXED FOR SINGLE-COLUMN ISSUE) ---
+
 @app.route('/api/save', methods=['POST'])
 def save_handler():
     try:
         data = request.get_json()
         sheet_name, rows_to_save = data.get('sheetName'), data.get('data')
-        if not rows_to_save or not sheet_name: return jsonify({"error": "Data or sheetName not provided."}), 400
+        if not rows_to_save or not sheet_name: 
+            return jsonify({"error": "Data or sheetName not provided."}), 400
         
+        # 1. Sheets API Auth
         creds_info = get_google_creds()
-        sheets_credentials = service_account.Credentials.from_service_account_info(creds_info, scopes=['https://www.googleapis.com/auth/spreadsheets'])
+        sheets_credentials = service_account.Credentials.from_service_account_info(
+            creds_info, scopes=['https://www.googleapis.com/auth/spreadsheets'])
         service = build('sheets', 'v4', credentials=sheets_credentials)
-        SPREADSHEET_ID = os.environ.get('SPREADSHEET_ID')
-        if not SPREADSHEET_ID: raise ValueError("SPREADSHEET_ID environment variable not set.")
-
-        is_fallback = len(rows_to_save[0]) == 1
         
-        # RECTIFIED: The complex "update" logic for Store Demand has been removed.
-        # It is now treated as a simple append operation like the others.
-        header = []
-        if is_fallback:
-            header = [['Notes (Unparsed)']]
-        elif "Purchases" in sheet_name:
-            header = [['Item Name', 'Quantity', 'Unit', 'Notes/Size', 'Price']]
-        elif "Inventory" in sheet_name:
-            header = [['Date', 'Item', 'Unit', 'Quantity']]
-        elif "StoreDemand" in sheet_name:
-            header = [['S. no.', 'Item', 'Unit', 'Quantity']]
+        SPREADSHEET_ID = os.environ.get('SPREADSHEET_ID')
+        if not SPREADSHEET_ID: 
+            raise ValueError("SPREADSHEET_ID environment variable not set.")
 
-        data_to_add = header + rows_to_save
-        body = {'values': data_to_add}
-        service.spreadsheets().values().append(
+        # 2. FIX: Determine the correct range to ensure multi-column insertion (A:D or A:E)
+        if "Purchases" in sheet_name:
+            # Purchases has 5 columns (A:E)
+            range_name = f"{sheet_name}!A:E"
+        elif "Inventory" in sheet_name or "StoreDemand" in sheet_name:
+            # Inventory/Demand has 4 columns (A:D)
+            range_name = f"{sheet_name}!A:D"
+        else:
+            # Default to 1 column for any unmapped sheet (A:A)
+            range_name = f"{sheet_name}!A:A" 
+            
+        # 3. CRITICAL FIX: The payload must ONLY contain the data rows. 
+        # The header must be manually placed in the sheet once.
+        body = {'values': rows_to_save}
+        
+        result = service.spreadsheets().values().append(
             spreadsheetId=SPREADSHEET_ID,
-            range=f"{sheet_name}!A1",
+            # Use the specified range width to guide the append operation
+            range=range_name,
             valueInputOption='USER_ENTERED',
             body=body
         ).execute()
-        return jsonify({"message": f"✅ Success! {len(rows_to_save)} items saved to {sheet_name}."})
+        
+        return jsonify({
+            "message": f"✅ Success! {len(rows_to_save)} items saved to {sheet_name}.",
+            "updated_range": result.get('updates').get('updatedRange')
+        })
 
     except Exception as e:
         return jsonify({"error": "An exception occurred during save", "details": str(e)}), 500
 
-# --- Health Check Route (no changes) ---
+# --- Health Check Route ---
 @app.route('/', methods=['GET'])
 def health_check():
     return jsonify({"status": "ok", "message": "Backend is running!"})
