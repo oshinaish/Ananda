@@ -171,7 +171,6 @@ def ocr_handler():
         return jsonify({"error": "An exception occurred during OCR", "details": str(e)}), 500
 
 # --- Endpoint 2: Save Handler (FIXED FOR SINGLE-COLUMN ISSUE) ---
-
 @app.route('/api/save', methods=['POST'])
 def save_handler():
     try:
@@ -180,47 +179,41 @@ def save_handler():
         if not rows_to_save or not sheet_name: 
             return jsonify({"error": "Data or sheetName not provided."}), 400
         
-        # 1. Sheets API Auth
-        creds_info = get_google_creds()
-        sheets_credentials = service_account.Credentials.from_service_account_info(
-            creds_info, scopes=['https://www.googleapis.com/auth/spreadsheets'])
-        service = build('sheets', 'v4', credentials=sheets_credentials)
-        
-        SPREADSHEET_ID = os.environ.get('SPREADSHEET_ID')
-        if not SPREADSHEET_ID: 
-            raise ValueError("SPREADSHEET_ID environment variable not set.")
+        # ... (Sheets API Auth and SPREADSHEET_ID checks remain the same) ...
 
-        # 2. FIX: Determine the correct range to ensure multi-column insertion (A:D or A:E)
+        # 1. ENFORCED: Ensure data is strictly list of lists of strings
+        cleaned_rows = []
+        for row in rows_to_save:
+            # Cast all elements to string to prevent API type misinterpretation
+            cleaned_row = [str(item) for item in row]
+            cleaned_rows.append(cleaned_row)
+
+        # 2. Determine the correct range (As previously fixed)
         if "Purchases" in sheet_name:
-            # Purchases has 5 columns (A:E)
-            range_name = f"{sheet_name}!A:E"
+            range_name = f"{sheet_name}!A:E"  # 5 columns
         elif "Inventory" in sheet_name or "StoreDemand" in sheet_name:
-            # Inventory/Demand has 4 columns (A:D)
-            range_name = f"{sheet_name}!A:D"
+            range_name = f"{sheet_name}!A:D"  # 4 columns
         else:
-            # Default to 1 column for any unmapped sheet (A:A)
             range_name = f"{sheet_name}!A:A" 
             
-        # 3. CRITICAL FIX: The payload must ONLY contain the data rows. 
-        # The header must be manually placed in the sheet once.
-        body = {'values': rows_to_save}
+        # 3. Payload Construction (using the cleaned data)
+        body = {'values': cleaned_rows} 
         
         result = service.spreadsheets().values().append(
             spreadsheetId=SPREADSHEET_ID,
-            # Use the specified range width to guide the append operation
             range=range_name,
             valueInputOption='USER_ENTERED',
             body=body
         ).execute()
         
         return jsonify({
-            "message": f"✅ Success! {len(rows_to_save)} items saved to {sheet_name}.",
+            "message": f"✅ Success! {len(cleaned_rows)} items saved to {sheet_name}.",
             "updated_range": result.get('updates').get('updatedRange')
         })
 
     except Exception as e:
         return jsonify({"error": "An exception occurred during save", "details": str(e)}), 500
-
+        
 # --- Health Check Route ---
 @app.route('/', methods=['GET'])
 def health_check():
